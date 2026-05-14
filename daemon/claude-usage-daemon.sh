@@ -151,6 +151,12 @@ start_notify_subscriber() {
         return 1
     fi
 
+    # Validate req_path is a safe D-Bus object path before interpolating into bash -c.
+    if [[ ! "$req_path" =~ ^/[a-zA-Z0-9/_]+$ ]]; then
+        log "Error: unexpected char path format '$req_path', skipping subscriber"
+        return 1
+    fi
+
     setsid bash -c "stdbuf -oL dbus-monitor --system \"type='signal',interface='org.freedesktop.DBus.Properties',path='$req_path',member='PropertiesChanged'\" 2>/dev/null | awk -v flag='$REFRESH_FLAG' '/Value/ { system(\"touch \" flag); fflush() }'" &
     NOTIFY_PID=$!
 
