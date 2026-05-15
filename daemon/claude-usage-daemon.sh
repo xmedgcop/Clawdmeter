@@ -1,4 +1,5 @@
 #!/bin/bash
+set -o pipefail
 # Claude Usage Tracker Daemon (BLE)
 # Reads Claude Code OAuth token, polls usage via API, sends to ESP32 over BLE GATT.
 # Auto-connects and reconnects to the Claude Controller BLE device.
@@ -157,7 +158,7 @@ start_notify_subscriber() {
         return 1
     fi
 
-    setsid bash -c "stdbuf -oL dbus-monitor --system \"type='signal',interface='org.freedesktop.DBus.Properties',path='$req_path',member='PropertiesChanged'\" 2>/dev/null | awk -v flag='$REFRESH_FLAG' '/Value/ { system(\"touch \" flag); fflush() }'" &
+    setsid bash -c "stdbuf -oL dbus-monitor --system \"type='signal',interface='org.freedesktop.DBus.Properties',path='$req_path',member='PropertiesChanged'\" 2>/dev/null | awk -v flag='$REFRESH_FLAG' '/Value/ { system(\"touch -- \" flag); fflush() }'" &
     NOTIFY_PID=$!
 
     # Give dbus-monitor a moment to register its match rule, then trigger
@@ -200,6 +201,7 @@ write_gatt() {
 poll() {
     local token
     token=$(read_token) || { log "Error: could not read token"; return 1; }
+    if [ -z "$token" ]; then log "Error: empty token"; return 1; fi
     local now
     now=$(date +%s)
 

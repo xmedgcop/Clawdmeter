@@ -45,7 +45,8 @@ mkdir -p "$CONFIG_DIR"
 if [ ! -f "$CONFIG_DIR/config.json" ]; then
     read -rp "  Enter your Claude account email (leave blank to skip): " email
     if [ -n "$email" ]; then
-        printf '{"email": "%s"}\n' "$email" > "$CONFIG_DIR/config.json"
+        python3 -c "import json,sys; print(json.dumps({'email': sys.argv[1]}))" "$email" \
+            > "$CONFIG_DIR/config.json"
         ok "Email saved to $CONFIG_DIR/config.json"
     else
         printf '{"email": ""}\n' > "$CONFIG_DIR/config.json"
@@ -80,7 +81,7 @@ GenericName=Claude Usage Monitor
 Comment=Desktop monitor for Claude Code usage
 Type=Application
 Icon=${APP_ID}
-Exec=python3 ${WIDGET}
+Exec=env GDK_BACKEND=x11 python3 ${WIDGET}
 StartupWMClass=${APP_ID}
 Categories=Utility;Monitor;
 Keywords=claude;ai;usage;monitor;clawdmeter;
@@ -98,7 +99,9 @@ cat > "$HOME/.config/autostart/${APP_ID}.desktop" << EOF
 [Desktop Entry]
 Type=Application
 Name=Clawdmeter
-Exec=python3 ${WIDGET}
+Icon=${APP_ID}
+Exec=env GDK_BACKEND=x11 python3 ${WIDGET}
+Terminal=false
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true

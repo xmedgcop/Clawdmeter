@@ -7,15 +7,14 @@ Usage:  python3 clawdmeter_desktop.py
 Deps:   python3-gi  python3-gi-cairo  (sudo apt install python3-gi-cairo)
 """
 
+import math
 import os
-os.environ.setdefault("GDK_BACKEND", "x11")  # use XWayland for _NET_WM_STATE_ABOVE
+os.environ.setdefault("GDK_BACKEND", "x11")  # force XWayland so wmctrl can set _NET_WM_STATE_ABOVE
 
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-gi.require_version("GdkX11", "4.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
-from gi.repository import GdkX11
 
 import threading
 import json
@@ -156,8 +155,10 @@ def poll_api():
             "st": status,
             "ok": True,
         }
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "API timeout"}
+    except Exception:
+        return {"ok": False, "error": "poll failed"}
 
 
 def poll_sessions():
@@ -183,8 +184,8 @@ def poll_sessions():
     return active
 
 
-def poll_context():
-    """Reads the most recent session JSONL and returns real context usage."""
+def poll_local_data():
+    """Single rglob pass — returns (ctx_dict, proj_dict) from the most recent JSONL."""
     projects_dir = Path.home() / ".claude" / "projects"
     CTX_WINDOW = 200_000
     try:
@@ -194,77 +195,53 @@ def poll_context():
             reverse=True,
         )
         if not jsonl_files:
-            return None
+            return None, None
 
-        lines = jsonl_files[0].read_text().strip().splitlines()
+        try:
+            lines = jsonl_files[0].read_text().strip().splitlines()
+        except OSError:
+            return None, None
 
-        # Find last assistant message with usage data
         input_tokens = cache_read = cache_create = output_tokens = 0
-        model = ""
-        for line in reversed(lines):
-            try:
-                msg = json.loads(line)
-                m = msg.get("message", {})
-                if m.get("role") == "assistant" and m.get("usage"):
-                    u = m["usage"]
-                    input_tokens  = u.get("input_tokens", 0)
-                    cache_read    = u.get("cache_read_input_tokens", 0)
-                    cache_create  = u.get("cache_creation_input_tokens", 0)
-                    output_tokens = u.get("output_tokens", 0)
-                    model         = m.get("model", "")
-                    break
-            except Exception:
-                pass
-
-        # Contexto activo = lo que el modelo ve ahora
-        ctx_used = input_tokens + cache_read + cache_create
-        pct = round(ctx_used / CTX_WINDOW * 100) if CTX_WINDOW else 0
-
-        return {
-            "ctx_used":   ctx_used,
-            "ctx_window": CTX_WINDOW,
-            "ctx_pct":    min(pct, 100),
-            "output":     output_tokens,
-            "model":      _short_model(model),
-            "file":       jsonl_files[0].stem[:8],
-        }
-    except Exception:
-        return None
-
-
-def poll_project_info():
-    """Reads project name and git branch from most recent JSONL session."""
-    projects_dir = Path.home() / ".claude" / "projects"
-    try:
-        jsonl_files = sorted(
-            projects_dir.rglob("*.jsonl"),
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
-        if not jsonl_files:
-            return None
-
-        lines = jsonl_files[0].read_text().strip().splitlines()
-        project_name = ""
-        git_branch = ""
+        model = project_name = git_branch = ""
 
         for line in reversed(lines):
             try:
                 msg = json.loads(line)
+                if not model:
+                    m = msg.get("message", {})
+                    if m.get("role") == "assistant" and m.get("usage"):
+                        u = m["usage"]
+                        input_tokens  = u.get("input_tokens", 0)
+                        cache_read    = u.get("cache_read_input_tokens", 0)
+                        cache_create  = u.get("cache_creation_input_tokens", 0)
+                        output_tokens = u.get("output_tokens", 0)
+                        model         = m.get("model", "")
                 if not project_name:
                     cwd = msg.get("cwd", "")
                     if cwd:
                         project_name = Path(cwd).name
                 if not git_branch:
                     git_branch = msg.get("gitBranch", "")
-                if project_name and git_branch:
+                if model and project_name and git_branch:
                     break
             except Exception:
                 pass
 
-        return {"project": project_name, "branch": git_branch}
+        ctx_used = input_tokens + cache_read + cache_create
+        pct = round(ctx_used / CTX_WINDOW * 100) if CTX_WINDOW else 0
+
+        ctx = {
+            "ctx_used":   ctx_used,
+            "ctx_window": CTX_WINDOW,
+            "ctx_pct":    min(pct, 100),
+            "output":     output_tokens,
+            "model":      _short_model(model),
+        }
+        proj = {"project": project_name, "branch": git_branch}
+        return ctx, proj
     except Exception:
-        return None
+        return None, None
 
 
 def _short_model(model: str) -> str:
@@ -279,10 +256,17 @@ def load_animations():
     if not index_path.exists():
         return []
     anims = []
-    for entry in json.loads(index_path.read_text()):
+    try:
+        entries = json.loads(index_path.read_text())
+    except Exception:
+        return []
+    for entry in entries:
         path = ANIM_DIR / entry["filename"].replace(".html", ".json")
         if path.exists():
-            anims.append(json.loads(path.read_text()))
+            try:
+                anims.append(json.loads(path.read_text()))
+            except Exception:
+                pass  # skip malformed animation files
     return anims
 
 
@@ -302,6 +286,8 @@ def pct_color(pct):
 
 def hex_to_rgba(hex_color):
     h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = h[0]*2 + h[1]*2 + h[2]*2   # expand #rgb → #rrggbb
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return r / 255, g / 255, b / 255, 1.0
 
@@ -337,10 +323,15 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         GLib.timeout_add(5_000, self._refresh_local)
 
     def _apply_keep_above(self):
-        subprocess.Popen(
-            ["wmctrl", "-r", "Clawdmeter", "-b", "add,above"],
-            stderr=subprocess.DEVNULL,
-        )
+        if shutil.which("wmctrl") is None:
+            return False
+        try:
+            subprocess.Popen(
+                ["wmctrl", "-r", "Clawdmeter", "-b", "add,above"],
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
         return False
 
     # ── CSS ───────────────────────────────────────────────────────────────────
@@ -378,19 +369,18 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
             min-width: 22px;
             min-height: 22px;
             padding: 3px;
-            border: none;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.45);
+            border: 1px solid rgba(255, 255, 255, 0.12);
             color: rgba(242, 242, 242, 0.80);
         }}
         .win-btn:hover {{
             background-color: rgba(110, 96, 140, 1.0);
             color: rgba(255, 255, 255, 1.0);
-            box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+            border-color: rgba(255, 255, 255, 0.25);
         }}
         .win-btn-close:hover {{
             background-color: {RED_C};
             color: rgba(255, 255, 255, 1.0);
-            box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+            border-color: rgba(255, 255, 255, 0.25);
         }}
         .section-label {{
             color: {DIM_C};
@@ -422,11 +412,6 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
             color: {ACCENT_C};
             font-size: 7.5pt;
             margin: 4px 10px 8px 10px;
-        }}
-        .status-dot {{
-            color: {GREEN_C};
-            font-size: 9pt;
-            font-weight: bold;
         }}
         .sessions-panel {{
             background-color: {PANEL_C};
@@ -661,10 +646,9 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         return True
 
     def _bg_local(self):
-        sessions = poll_sessions()
-        ctx      = poll_context()
-        proj     = poll_project_info()
-        email    = read_account_info()
+        sessions    = poll_sessions()
+        ctx, proj   = poll_local_data()
+        email       = read_account_info()
         GLib.idle_add(self._apply_local, sessions, ctx, proj, email)
 
     def _apply_local(self, sessions, ctx, proj=None, email=""):
@@ -840,22 +824,20 @@ class _ProgressBar(Gtk.DrawingArea):
 
     def _draw(self, area, cr, width, height):
         # Track
-        r, g, b, a = hex_to_rgba(BAR_BG_C)
+        r, g, b, _ = hex_to_rgba(BAR_BG_C)
         cr.set_source_rgba(r, g, b, 1.0)
         _rounded_rect(cr, 0, 0, width, height, height / 2)
         cr.fill()
         # Fill
         fill_w = int(width * self._value)
         if fill_w > 0:
-            r, g, b, a = hex_to_rgba(self._color)
+            r, g, b, _ = hex_to_rgba(self._color)
             cr.set_source_rgba(r, g, b, 0.85)
             _rounded_rect(cr, 0, 0, fill_w, height, height / 2)
             cr.fill()
 
 
 def _rounded_rect(cr, x, y, w, h, r):
-    """Draw a rounded rectangle path."""
-    import math
     cr.new_sub_path()
     cr.arc(x + w - r, y + r,     r, -math.pi / 2, 0)
     cr.arc(x + w - r, y + h - r, r, 0,             math.pi / 2)
