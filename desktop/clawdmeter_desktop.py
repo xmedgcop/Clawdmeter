@@ -134,6 +134,85 @@ def poll_api():
         return {"ok": False, "error": str(exc)}
 
 
+def poll_sessions():
+    """Lee ~/.claude/sessions/*.json y devuelve sesiones activas."""
+    sessions_dir = Path.home() / ".claude" / "sessions"
+    active = []
+    try:
+        for f in sessions_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text())
+                # Verificar que el proceso sigue vivo
+                pid = d.get("pid")
+                if pid and Path(f"/proc/{pid}").exists():
+                    active.append({
+                        "pid":    pid,
+                        "status": d.get("status", "?"),
+                        "cwd":    Path(d.get("cwd", "?")).name,
+                    })
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return active
+
+
+def poll_context():
+    """Lee el JSONL de sesión más reciente y devuelve uso de contexto real."""
+    projects_dir = Path.home() / ".claude" / "projects"
+    CTX_WINDOW = 200_000
+    try:
+        jsonl_files = sorted(
+            projects_dir.rglob("*.jsonl"),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+        if not jsonl_files:
+            return None
+
+        lines = jsonl_files[0].read_text().strip().splitlines()
+
+        # Buscar el último mensaje assistant con usage
+        input_tokens = cache_read = cache_create = output_tokens = 0
+        model = ""
+        for line in reversed(lines):
+            try:
+                msg = json.loads(line)
+                m = msg.get("message", {})
+                if m.get("role") == "assistant" and m.get("usage"):
+                    u = m["usage"]
+                    input_tokens  = u.get("input_tokens", 0)
+                    cache_read    = u.get("cache_read_input_tokens", 0)
+                    cache_create  = u.get("cache_creation_input_tokens", 0)
+                    output_tokens = u.get("output_tokens", 0)
+                    model         = m.get("model", "")
+                    break
+            except Exception:
+                pass
+
+        # Contexto activo = lo que el modelo ve ahora
+        ctx_used = input_tokens + cache_read + cache_create
+        pct = round(ctx_used / CTX_WINDOW * 100) if CTX_WINDOW else 0
+
+        return {
+            "ctx_used":   ctx_used,
+            "ctx_window": CTX_WINDOW,
+            "ctx_pct":    min(pct, 100),
+            "output":     output_tokens,
+            "model":      _short_model(model),
+            "file":       jsonl_files[0].stem[:8],
+        }
+    except Exception:
+        return None
+
+
+def _short_model(model: str) -> str:
+    if "opus" in model:   return "Opus"
+    if "sonnet" in model: return "Sonnet"
+    if "haiku" in model:  return "Haiku"
+    return model.split("-")[0].capitalize() if model else "?"
+
+
 def load_animations():
     index_path = ANIM_DIR / "_index.json"
     if not index_path.exists():
@@ -191,6 +270,9 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         self._schedule_anim_tick()
         self._schedule_spinner_tick()
         GLib.timeout_add(500, self._drain_queue)
+        # Sesiones y contexto se leen localmente — más frecuente
+        self._refresh_local()
+        GLib.timeout_add(5_000, self._refresh_local)
 
     # ── CSS ───────────────────────────────────────────────────────────────────
 
@@ -264,6 +346,27 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
             color: {GREEN_C};
             font-size: 9pt;
             font-weight: bold;
+        }}
+        .sessions-panel {{
+            background-color: {PANEL_C};
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            padding: 8px 12px;
+            margin: 6px 8px 0 8px;
+        }}
+        .sessions-title {{
+            color: {DIM_C};
+            font-size: 7pt;
+            letter-spacing: 1px;
+        }}
+        .sessions-value {{
+            color: {TEXT_C};
+            font-weight: bold;
+            font-size: 15pt;
+        }}
+        .ctx-label {{
+            color: {DIM_C};
+            font-size: 7.5pt;
         }}
         """
         provider = Gtk.CssProvider()
@@ -365,6 +468,39 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         self._w_reset = self._lbl("---", "reset-label")
         wpanel.append(self._w_reset)
 
+        # ── Sesiones + Contexto ──
+        spanel = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        spanel.add_css_class("sessions-panel")
+        root.append(spanel)
+
+        # Bloque sesiones
+        sess_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        sess_box.set_hexpand(True)
+        spanel.append(sess_box)
+        sess_box.append(self._lbl("SESIONES", "sessions-title"))
+        self._lbl_sessions = self._lbl("—", "sessions-value")
+        sess_box.append(self._lbl_sessions)
+        self._lbl_sess_detail = self._lbl("", "ctx-label")
+        sess_box.append(self._lbl_sess_detail)
+
+        # Separador visual
+        sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        sep.set_margin_top(4)
+        sep.set_margin_bottom(4)
+        spanel.append(sep)
+
+        # Bloque contexto
+        ctx_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        ctx_box.set_hexpand(True)
+        spanel.append(ctx_box)
+        ctx_box.append(self._lbl("CONTEXTO", "sessions-title"))
+        self._lbl_ctx_pct = self._lbl("—", "sessions-value")
+        ctx_box.append(self._lbl_ctx_pct)
+        self._lbl_ctx_detail = self._lbl("", "ctx-label")
+        ctx_box.append(self._lbl_ctx_detail)
+        self._ctx_bar = _ProgressBar(GREEN_C)
+        ctx_box.append(self._ctx_bar)
+
         # ── Spinner ──
         self._spinner_lbl = self._lbl("", "spinner-label")
         self._spinner_lbl.set_halign(Gtk.Align.START)
@@ -378,7 +514,48 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         lbl.set_xalign(0)
         return lbl
 
-    # ── Polling ───────────────────────────────────────────────────────────────
+    # ── Sesiones y contexto (locales, rápidos) ────────────────────────────────
+
+    def _refresh_local(self):
+        threading.Thread(target=self._bg_local, daemon=True).start()
+        return True
+
+    def _bg_local(self):
+        sessions = poll_sessions()
+        ctx      = poll_context()
+        GLib.idle_add(self._apply_local, sessions, ctx)
+
+    def _apply_local(self, sessions, ctx):
+        n = len(sessions)
+        busy  = sum(1 for s in sessions if s["status"] == "busy")
+        idle  = n - busy
+
+        self._lbl_sessions.set_markup(
+            f'<span foreground="{TEXT_C}" font_weight="bold" font_size="15pt">{n}</span>'
+        )
+        if n == 0:
+            self._lbl_sess_detail.set_label("sin sesiones")
+        else:
+            parts = []
+            if busy: parts.append(f"{busy} activa{'s' if busy>1 else ''}")
+            if idle: parts.append(f"{idle} idle")
+            self._lbl_sess_detail.set_label(" · ".join(parts))
+
+        if ctx:
+            pct = ctx["ctx_pct"]
+            color = pct_color(pct)
+            self._lbl_ctx_pct.set_markup(
+                f'<span foreground="{color}" font_weight="bold" font_size="15pt">{pct}%</span>'
+            )
+            used_k = ctx["ctx_used"] // 1000
+            self._lbl_ctx_detail.set_label(f"{used_k}k / 200k  {ctx['model']}")
+            self._ctx_bar.set_value(pct / 100, color)
+        else:
+            self._lbl_ctx_pct.set_label("—")
+            self._lbl_ctx_detail.set_label("sin sesión activa")
+            self._ctx_bar.set_value(0, GREEN_C)
+
+    # ── Polling API ───────────────────────────────────────────────────────────
 
     def _do_poll(self):
         threading.Thread(target=lambda: self._poll_q.put(poll_api()),
