@@ -184,23 +184,57 @@ def poll_sessions():
     return active
 
 
+def _active_session_uuids():
+    """Return UUIDs of sessions whose process is still alive."""
+    sessions_dir = Path.home() / ".claude" / "sessions"
+    uuids = []
+    try:
+        for f in sessions_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text())
+                pid = d.get("pid")
+                if pid and Path(f"/proc/{pid}").exists():
+                    uuids.append(f.stem)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return uuids
+
+
 def poll_local_data():
-    """Single rglob pass — returns (ctx_dict, proj_dict) from the most recent JSONL."""
+    """Single pass — returns (ctx_dict, proj_dict) for the current active session."""
     projects_dir = Path.home() / ".claude" / "projects"
     CTX_WINDOW = 200_000
-    try:
-        jsonl_files = sorted(
-            projects_dir.rglob("*.jsonl"),
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
-        if not jsonl_files:
+
+    # Prefer the JSONL that belongs to an active session (live PID)
+    target = None
+    for uuid in _active_session_uuids():
+        matches = list(projects_dir.rglob(f"{uuid}.jsonl"))
+        if matches:
+            target = max(matches, key=lambda f: f.stat().st_mtime)
+            break
+
+    # Fall back to most recently modified JSONL if no active session found
+    if target is None:
+        try:
+            all_files = sorted(
+                projects_dir.rglob("*.jsonl"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            if all_files:
+                target = all_files[0]
+        except Exception:
             return None, None
 
-        try:
-            lines = jsonl_files[0].read_text().strip().splitlines()
-        except OSError:
-            return None, None
+    if target is None:
+        return None, None
+
+    try:
+        lines = target.read_text().strip().splitlines()
+    except OSError:
+        return None, None
 
         input_tokens = cache_read = cache_create = output_tokens = 0
         model = project_name = git_branch = ""
