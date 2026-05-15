@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Clawdmeter Desktop Widget — GTK4 / Hacker Edition
-Ubuntu version of the ESP32 Claude usage monitor.
+Clawdmeter Desktop Widget — GTK4
+Ubuntu floating widget for the Claude Code usage monitor.
 
 Usage:  python3 clawdmeter_desktop.py
 Deps:   python3-gi  python3-gi-cairo  (sudo apt install python3-gi-cairo)
@@ -10,7 +10,7 @@ Deps:   python3-gi  python3-gi-cairo  (sudo apt install python3-gi-cairo)
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gtk, Gdk, GLib
+from gi.repository import Gtk, Gdk, GLib, Pango
 
 import threading
 import json
@@ -44,17 +44,17 @@ ANIM_DIR = Path(__file__).parent.parent / "tools" / "claudepix_data"
 
 # ── Ubuntu Yaru-dark palette ──────────────────────────────────────────────────
 BG        = "transparent"
-CONTAINER = "rgba(22, 20, 26, 0.70)"   # dark, very transparent — muestra el escritorio
-TITLEBAR  = "rgba(38, 34, 46, 0.97)"   # casi sólido — legible
-PANEL_C   = "rgba(32, 28, 40, 0.88)"   # panel interior semi-opaco
-TEXT_C    = "#f2f2f2"                   # blanco suave Ubuntu
-DIM_C     = "#a09aaa"                   # gris-lavanda
-ACCENT_C  = "#E95420"                   # naranja Ubuntu — spinner/accent
-GREEN_C   = "#26a269"                   # verde Yaru — uso bajo
-AMBER_C   = "#e5a50a"                   # ámbar Yaru — uso medio
-RED_C     = "#c01c28"                   # rojo Yaru — uso alto
-BAR_BG_C  = "#1a1520"                   # pista de barra
-BORDER_C  = "rgba(255, 255, 255, 0.08)" # borde sutil casi invisible
+CONTAINER = "rgba(22, 20, 26, 0.70)"   # dark, very transparent — shows desktop
+TITLEBAR  = "rgba(38, 34, 46, 0.97)"   # nearly solid — readable
+PANEL_C   = "rgba(32, 28, 40, 0.88)"   # semi-opaque inner panel
+TEXT_C    = "#f2f2f2"                   # Ubuntu soft white
+DIM_C     = "#a09aaa"                   # grey-lavender dim text
+ACCENT_C  = "#E95420"                   # Ubuntu orange — spinner/accent
+GREEN_C   = "#26a269"                   # Yaru green — low usage
+AMBER_C   = "#e5a50a"                   # Yaru amber — mid usage
+RED_C     = "#c01c28"                   # Yaru red — high usage
+BAR_BG_C  = "#1a1520"                   # bar track
+BORDER_C  = "rgba(255, 255, 255, 0.08)" # subtle near-invisible border
 
 # ── Spinner ───────────────────────────────────────────────────────────────────
 SPINNER_FRAMES = ["·", "✻", "✽", "✶", "✳", "✢"]
@@ -90,6 +90,27 @@ def read_token():
         return m.group(1) if m else None
     except Exception:
         return None
+
+
+def read_account_info():
+    """Email from ~/.config/clawdmeter/config.json; fallback to subscriptionType."""
+    config_file = Path.home() / ".config" / "clawdmeter" / "config.json"
+    try:
+        cfg = json.loads(config_file.read_text())
+        email = cfg.get("email", "")
+        if email:
+            return email
+    except Exception:
+        pass
+    try:
+        creds_path = Path.home() / ".claude" / ".credentials.json"
+        d = json.loads(creds_path.read_text())
+        sub = d.get("claudeAiOauth", {}).get("subscriptionType", "")
+        if sub:
+            return f"claude {sub}"
+    except Exception:
+        pass
+    return ""
 
 
 def poll_api():
@@ -135,7 +156,7 @@ def poll_api():
 
 
 def poll_sessions():
-    """Lee ~/.claude/sessions/*.json y devuelve sesiones activas."""
+    """Reads ~/.claude/sessions/*.json and returns active sessions."""
     sessions_dir = Path.home() / ".claude" / "sessions"
     active = []
     try:
@@ -158,7 +179,7 @@ def poll_sessions():
 
 
 def poll_context():
-    """Lee el JSONL de sesión más reciente y devuelve uso de contexto real."""
+    """Reads the most recent session JSONL and returns real context usage."""
     projects_dir = Path.home() / ".claude" / "projects"
     CTX_WINDOW = 200_000
     try:
@@ -172,7 +193,7 @@ def poll_context():
 
         lines = jsonl_files[0].read_text().strip().splitlines()
 
-        # Buscar el último mensaje assistant con usage
+        # Find last assistant message with usage data
         input_tokens = cache_read = cache_create = output_tokens = 0
         model = ""
         for line in reversed(lines):
@@ -202,6 +223,41 @@ def poll_context():
             "model":      _short_model(model),
             "file":       jsonl_files[0].stem[:8],
         }
+    except Exception:
+        return None
+
+
+def poll_project_info():
+    """Reads project name and git branch from most recent JSONL session."""
+    projects_dir = Path.home() / ".claude" / "projects"
+    try:
+        jsonl_files = sorted(
+            projects_dir.rglob("*.jsonl"),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+        if not jsonl_files:
+            return None
+
+        lines = jsonl_files[0].read_text().strip().splitlines()
+        project_name = ""
+        git_branch = ""
+
+        for line in reversed(lines):
+            try:
+                msg = json.loads(line)
+                if not project_name:
+                    cwd = msg.get("cwd", "")
+                    if cwd:
+                        project_name = Path(cwd).name
+                if not git_branch:
+                    git_branch = msg.get("gitBranch", "")
+                if project_name and git_branch:
+                    break
+            except Exception:
+                pass
+
+        return {"project": project_name, "branch": git_branch}
     except Exception:
         return None
 
@@ -270,7 +326,7 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         self._schedule_anim_tick()
         self._schedule_spinner_tick()
         GLib.timeout_add(500, self._drain_queue)
-        # Sesiones y contexto se leen localmente — más frecuente
+        # Sessions and context are read locally — faster refresh
         self._refresh_local()
         GLib.timeout_add(5_000, self._refresh_local)
 
@@ -368,6 +424,11 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
             color: {DIM_C};
             font-size: 7.5pt;
         }}
+        .project-info {{
+            color: {DIM_C};
+            font-size: 7pt;
+            font-family: monospace;
+        }}
         """
         provider = Gtk.CssProvider()
         provider.load_from_string(css)
@@ -457,10 +518,30 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         wpanel.add_css_class("weekly-panel")
         root.append(wpanel)
 
-        wpanel.append(self._lbl("WEEKLY", "section-label"))
+        # Two columns: left = WEEKLY + %, right = project/branch/email
+        w_top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        wpanel.append(w_top)
 
+        w_left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        w_left.set_halign(Gtk.Align.START)
+        w_left.set_hexpand(True)
+        w_top.append(w_left)
+
+        w_left.append(self._lbl("WEEKLY", "section-label"))
         self._w_pct = self._lbl("---%", "weekly-pct")
-        wpanel.append(self._w_pct)
+        w_left.append(self._w_pct)
+
+        w_meta = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        w_meta.set_halign(Gtk.Align.END)
+        w_meta.set_valign(Gtk.Align.START)
+        w_top.append(w_meta)
+
+        self._w_project = self._elbl("project-info", align=Gtk.Align.END)
+        self._w_branch  = self._elbl("project-info", align=Gtk.Align.END)
+        self._w_account = self._elbl("project-info", align=Gtk.Align.END)
+        w_meta.append(self._w_project)
+        w_meta.append(self._w_branch)
+        w_meta.append(self._w_account)
 
         self._w_bar = _ProgressBar(GREEN_C)
         wpanel.append(self._w_bar)
@@ -473,27 +554,27 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         spanel.add_css_class("sessions-panel")
         root.append(spanel)
 
-        # Bloque sesiones
+        # Sessions block
         sess_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         sess_box.set_hexpand(True)
         spanel.append(sess_box)
-        sess_box.append(self._lbl("SESIONES", "sessions-title"))
+        sess_box.append(self._lbl("SESSIONS", "sessions-title"))
         self._lbl_sessions = self._lbl("—", "sessions-value")
         sess_box.append(self._lbl_sessions)
         self._lbl_sess_detail = self._lbl("", "ctx-label")
         sess_box.append(self._lbl_sess_detail)
 
-        # Separador visual
+        # Divider
         sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
         sep.set_margin_top(4)
         sep.set_margin_bottom(4)
         spanel.append(sep)
 
-        # Bloque contexto
+        # Context block
         ctx_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         ctx_box.set_hexpand(True)
         spanel.append(ctx_box)
-        ctx_box.append(self._lbl("CONTEXTO", "sessions-title"))
+        ctx_box.append(self._lbl("CONTEXT", "sessions-title"))
         self._lbl_ctx_pct = self._lbl("—", "sessions-value")
         ctx_box.append(self._lbl_ctx_pct)
         self._lbl_ctx_detail = self._lbl("", "ctx-label")
@@ -514,7 +595,19 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         lbl.set_xalign(0)
         return lbl
 
-    # ── Sesiones y contexto (locales, rápidos) ────────────────────────────────
+    @staticmethod
+    def _elbl(css_class, max_chars=10, align=Gtk.Align.START):
+        """Label with end-ellipsis and tooltip for full text on hover."""
+        lbl = Gtk.Label(label="")
+        lbl.add_css_class(css_class)
+        lbl.set_halign(align)
+        lbl.set_xalign(1.0 if align == Gtk.Align.END else 0.0)
+        lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        lbl.set_max_width_chars(max_chars)
+        return lbl
+
+
+    # ── Sessions and context (local, fast refresh) ───────────────────────────
 
     def _refresh_local(self):
         threading.Thread(target=self._bg_local, daemon=True).start()
@@ -523,9 +616,11 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
     def _bg_local(self):
         sessions = poll_sessions()
         ctx      = poll_context()
-        GLib.idle_add(self._apply_local, sessions, ctx)
+        proj     = poll_project_info()
+        email    = read_account_info()
+        GLib.idle_add(self._apply_local, sessions, ctx, proj, email)
 
-    def _apply_local(self, sessions, ctx):
+    def _apply_local(self, sessions, ctx, proj=None, email=""):
         n = len(sessions)
         busy  = sum(1 for s in sessions if s["status"] == "busy")
         idle  = n - busy
@@ -534,10 +629,10 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
             f'<span foreground="{TEXT_C}" font_weight="bold" font_size="15pt">{n}</span>'
         )
         if n == 0:
-            self._lbl_sess_detail.set_label("sin sesiones")
+            self._lbl_sess_detail.set_label("no sessions")
         else:
             parts = []
-            if busy: parts.append(f"{busy} activa{'s' if busy>1 else ''}")
+            if busy: parts.append(f"{busy} active")
             if idle: parts.append(f"{idle} idle")
             self._lbl_sess_detail.set_label(" · ".join(parts))
 
@@ -552,8 +647,18 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
             self._ctx_bar.set_value(pct / 100, color)
         else:
             self._lbl_ctx_pct.set_label("—")
-            self._lbl_ctx_detail.set_label("sin sesión activa")
+            self._lbl_ctx_detail.set_label("no active session")
             self._ctx_bar.set_value(0, GREEN_C)
+
+        # Project + branch + account
+        p = proj.get("project", "") if proj else ""
+        b = proj.get("branch",  "") if proj else ""
+        full_tip = "\n".join(x for x in [p, b, email] if x)
+        self._w_project.set_label(p)
+        self._w_branch.set_label(b)
+        self._w_account.set_label(email)
+        for lbl in (self._w_project, self._w_branch, self._w_account):
+            lbl.set_tooltip_text(full_tip or None)
 
     # ── Polling API ───────────────────────────────────────────────────────────
 
