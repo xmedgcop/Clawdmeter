@@ -7,10 +7,15 @@ Usage:  python3 clawdmeter_desktop.py
 Deps:   python3-gi  python3-gi-cairo  (sudo apt install python3-gi-cairo)
 """
 
+import os
+os.environ.setdefault("GDK_BACKEND", "x11")  # use XWayland for _NET_WM_STATE_ABOVE
+
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
+gi.require_version("GdkX11", "4.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
+from gi.repository import GdkX11
 
 import threading
 import json
@@ -310,6 +315,7 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         self.set_decorated(False)
         self.set_resizable(False)
         self.set_icon_name(ICON_NAME)
+        self.connect("realize", lambda *_: GLib.timeout_add(300, self._apply_keep_above))
 
         self.animations  = load_animations()
         self._anim_idx   = 0
@@ -330,6 +336,13 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         self._refresh_local()
         GLib.timeout_add(5_000, self._refresh_local)
 
+    def _apply_keep_above(self):
+        subprocess.Popen(
+            ["wmctrl", "-r", "Clawdmeter", "-b", "add,above"],
+            stderr=subprocess.DEVNULL,
+        )
+        return False
+
     # ── CSS ───────────────────────────────────────────────────────────────────
 
     def _build_css(self):
@@ -345,7 +358,7 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         }}
         .titlebar {{
             background-color: {TITLEBAR};
-            padding: 3px 8px 3px 10px;
+            padding: 5px 8px 5px 10px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.07);
             border-radius: 14px 14px 0 0;
         }}
@@ -354,18 +367,30 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
             font-size: 10pt;
             font-weight: bold;
         }}
-        .close-btn {{
-            background-color: rgba(65, 58, 80, 0.85);
-            color: rgba(242, 242, 242, 0.65);
-            border-radius: 50%;
-            min-width: 20px;
-            min-height: 20px;
-            padding: 0;
-            font-size: 10pt;
+        .status-sub {{
+            color: {DIM_C};
+            font-size: 7pt;
+            font-family: monospace;
         }}
-        .close-btn:hover {{
-            background-color: rgba(192, 57, 43, 0.85);
-            color: rgba(255, 255, 255, 0.95);
+        .win-btn {{
+            background-color: rgba(72, 64, 90, 0.70);
+            border-radius: 50%;
+            min-width: 22px;
+            min-height: 22px;
+            padding: 3px;
+            border: none;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.45);
+            color: rgba(242, 242, 242, 0.80);
+        }}
+        .win-btn:hover {{
+            background-color: rgba(110, 96, 140, 1.0);
+            color: rgba(255, 255, 255, 1.0);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+        }}
+        .win-btn-close:hover {{
+            background-color: {RED_C};
+            color: rgba(255, 255, 255, 1.0);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.6);
         }}
         .section-label {{
             color: {DIM_C};
@@ -454,28 +479,36 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         tbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         tbar.add_css_class("titlebar")
 
+        # Left: title + status sub-label stacked
+        title_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        title_col.set_hexpand(True)
+        title_col.set_halign(Gtk.Align.START)
+        title_col.set_valign(Gtk.Align.CENTER)
+
         title = Gtk.Label(label="claude usage")
         title.add_css_class("title-label")
-        title.set_hexpand(True)
         title.set_halign(Gtk.Align.START)
-        tbar.append(title)
+        title_col.append(title)
 
-        self._status_dot = Gtk.Label(label="● on")
-        self._status_dot.add_css_class("status-dot")
-        self._status_dot.set_margin_end(8)
-        tbar.append(self._status_dot)
+        self._status_dot = Gtk.Label(label="◆ connecting…")
+        self._status_dot.add_css_class("status-sub")
+        self._status_dot.set_halign(Gtk.Align.START)
+        title_col.append(self._status_dot)
 
-        close = Gtk.Button()
-        close.add_css_class("close-btn")
-        close.set_has_frame(False)
-        close.set_valign(Gtk.Align.CENTER)
-        close.set_halign(Gtk.Align.CENTER)
-        close_lbl = Gtk.Label(label="✕")
-        close_lbl.set_halign(Gtk.Align.CENTER)
-        close_lbl.set_valign(Gtk.Align.CENTER)
-        close.set_child(close_lbl)
+        tbar.append(title_col)
+
+        # Right: window buttons
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        btn_box.set_valign(Gtk.Align.CENTER)
+        tbar.append(btn_box)
+
+        minimize = self._win_btn("window-minimize-symbolic", close=False)
+        minimize.connect("clicked", lambda _: self.minimize())
+        btn_box.append(minimize)
+
+        close = self._win_btn("window-close-symbolic", close=True)
         close.connect("clicked", lambda _: self.close())
-        tbar.append(close)
+        btn_box.append(close)
 
         handle.set_child(tbar)
         root.append(handle)
@@ -596,6 +629,20 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         return lbl
 
     @staticmethod
+    def _win_btn(icon_name, close=False):
+        btn = Gtk.Button()
+        btn.set_has_frame(False)
+        btn.add_css_class("win-btn")
+        if close:
+            btn.add_css_class("win-btn-close")
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.set_halign(Gtk.Align.CENTER)
+        img = Gtk.Image.new_from_icon_name(icon_name)
+        img.set_pixel_size(12)
+        btn.set_child(img)
+        return btn
+
+    @staticmethod
     def _elbl(css_class, max_chars=10, align=Gtk.Align.START):
         """Label with end-ellipsis and tooltip for full text on hover."""
         lbl = Gtk.Label(label="")
@@ -680,7 +727,7 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         if not data.get("ok"):
             self._spinner_lbl.set_label(f"⚠ {data.get('error', 'poll failed')}")
             self._status_dot.set_markup(
-                f'<span foreground="{RED_C}" font_family="monospace" font_size="7pt">◆ ERR</span>'
+                f'<span foreground="{RED_C}">◆ error</span>'
             )
             return
 
@@ -689,9 +736,9 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         st = data.get("st", "allowed")
 
         dot_color = RED_C if st == "limited" else GREEN_C
-        dot_text  = "◆ LMT" if st == "limited" else "◆ ON"
+        dot_text  = "◆ rate limited" if st == "limited" else "◆ online"
         self._status_dot.set_markup(
-            f'<span foreground="{dot_color}" font_family="monospace" font_size="7pt">{dot_text}</span>'
+            f'<span foreground="{dot_color}">{dot_text}</span>'
         )
 
         self._s_pct.set_markup(

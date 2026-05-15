@@ -6,6 +6,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 WIDGET="$SCRIPT_DIR/clawdmeter_desktop.py"
 ICON_SRC="$PROJECT_DIR/assets/Claude Code Logo.png"
 APP_ID="com.clawdmeter"
+CONFIG_DIR="$HOME/.config/clawdmeter"
 
 GREEN="\033[0;32m"
 YELLOW="\033[1;33m"
@@ -22,22 +23,40 @@ echo "║     Clawdmeter Desktop — Install     ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
-# ── 1. Dependencias ──────────────────────────────────────────────────────────
-echo "[1/4] Verificando dependencias..."
+# ── 1. Dependencies ───────────────────────────────────────────────────────────
+echo "[1/5] Checking dependencies..."
 
 MISSING=""
-python3 -c "import gi" 2>/dev/null          || MISSING="$MISSING python3-gi"
-python3 -c "import cairo" 2>/dev/null       || MISSING="$MISSING python3-gi-cairo"
-command -v curl >/dev/null 2>&1             || MISSING="$MISSING curl"
+python3 -c "import gi" 2>/dev/null       || MISSING="$MISSING python3-gi"
+python3 -c "import cairo" 2>/dev/null    || MISSING="$MISSING python3-gi-cairo"
+command -v curl    >/dev/null 2>&1       || MISSING="$MISSING curl"
+command -v wmctrl  >/dev/null 2>&1       || MISSING="$MISSING wmctrl"
 
 if [ -n "$MISSING" ]; then
-    info "Instalando:$MISSING"
+    info "Installing:$MISSING"
     sudo apt install -y $MISSING
 fi
-ok "Dependencias listas"
+ok "Dependencies ready"
 
-# ── 2. Ícono ─────────────────────────────────────────────────────────────────
-echo "[2/4] Instalando ícono..."
+# ── 2. Account config ─────────────────────────────────────────────────────────
+echo "[2/5] Configuring account..."
+
+mkdir -p "$CONFIG_DIR"
+if [ ! -f "$CONFIG_DIR/config.json" ]; then
+    read -rp "  Enter your Claude account email (leave blank to skip): " email
+    if [ -n "$email" ]; then
+        printf '{"email": "%s"}\n' "$email" > "$CONFIG_DIR/config.json"
+        ok "Email saved to $CONFIG_DIR/config.json"
+    else
+        printf '{"email": ""}\n' > "$CONFIG_DIR/config.json"
+        info "No email set — you can edit $CONFIG_DIR/config.json later"
+    fi
+else
+    ok "Config already exists ($CONFIG_DIR/config.json)"
+fi
+
+# ── 3. Icon ───────────────────────────────────────────────────────────────────
+echo "[3/5] Installing icon..."
 
 ICON_DIR="$HOME/.local/share/icons/hicolor/128x128/apps"
 mkdir -p "$ICON_DIR"
@@ -45,20 +64,20 @@ mkdir -p "$ICON_DIR"
 if [ -f "$ICON_SRC" ]; then
     cp "$ICON_SRC" "$ICON_DIR/${APP_ID}.png"
     gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
-    ok "Ícono instalado"
+    ok "Icon installed"
 else
-    info "Ícono no encontrado en assets/, se usará el ícono por defecto"
+    info "Icon not found in assets/ — default icon will be used"
 fi
 
-# ── 3. Entrada en el launcher de aplicaciones ─────────────────────────────────
-echo "[3/4] Registrando en el launcher de apps..."
+# ── 4. App launcher entry ─────────────────────────────────────────────────────
+echo "[4/5] Registering in app launcher..."
 
 mkdir -p "$HOME/.local/share/applications"
 cat > "$HOME/.local/share/applications/${APP_ID}.desktop" << EOF
 [Desktop Entry]
 Name=Clawdmeter
 GenericName=Claude Usage Monitor
-Comment=Monitor de uso de Claude Code en el escritorio
+Comment=Desktop monitor for Claude Code usage
 Type=Application
 Icon=${APP_ID}
 Exec=python3 ${WIDGET}
@@ -69,10 +88,10 @@ NoDisplay=false
 EOF
 
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
-ok "Disponible en el launcher (busca 'Clawdmeter')"
+ok "Available in launcher (search 'Clawdmeter')"
 
-# ── 4. Autostart ──────────────────────────────────────────────────────────────
-echo "[4/4] Configurando inicio automático..."
+# ── 5. Autostart ──────────────────────────────────────────────────────────────
+echo "[5/5] Configuring autostart..."
 
 mkdir -p "$HOME/.config/autostart"
 cat > "$HOME/.config/autostart/${APP_ID}.desktop" << EOF
@@ -85,23 +104,23 @@ NoDisplay=false
 X-GNOME-Autostart-enabled=true
 EOF
 
-ok "Arrancará automáticamente al iniciar sesión"
+ok "Will start automatically on login"
 
-# ── Listo ─────────────────────────────────────────────────────────────────────
+# ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║           ¡Instalación lista!        ║${NC}"
+echo -e "${GREEN}║        Installation complete!        ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════╝${NC}"
 echo ""
-echo "  • Búscalo en tus apps como 'Clawdmeter'"
-echo "  • Arranca solo al iniciar sesión"
-echo "  • Para desinstalarlo: ./uninstall.sh"
+echo "  • Find it in your apps as 'Clawdmeter'"
+echo "  • Starts automatically on login"
+echo "  • To uninstall: ./uninstall.sh"
 echo ""
 
-read -rp "  ¿Lanzar ahora? [Y/n] " answer
+read -rp "  Launch now? [Y/n] " answer
 if [[ "$answer" != "n" && "$answer" != "N" ]]; then
     python3 "$WIDGET" &
-    ok "¡Lanzado!"
+    ok "Launched!"
 fi
 
 echo ""
