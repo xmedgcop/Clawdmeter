@@ -185,7 +185,7 @@ def poll_sessions():
 
 
 def _active_session_uuids():
-    """Return UUIDs of sessions whose process is still alive."""
+    """Return sessionIds of sessions whose process is still alive."""
     sessions_dir = Path.home() / ".claude" / "sessions"
     uuids = []
     try:
@@ -193,8 +193,9 @@ def _active_session_uuids():
             try:
                 d = json.loads(f.read_text())
                 pid = d.get("pid")
-                if pid and Path(f"/proc/{pid}").exists():
-                    uuids.append(f.stem)
+                sid = d.get("sessionId", "")
+                if pid and sid and Path(f"/proc/{pid}").exists():
+                    uuids.append(sid)
             except Exception:
                 pass
     except Exception:
@@ -236,6 +237,7 @@ def poll_local_data():
     except OSError:
         return None, None
 
+    try:
         input_tokens = cache_read = cache_create = output_tokens = 0
         model = project_name = git_branch = ""
 
