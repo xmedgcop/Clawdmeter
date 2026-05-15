@@ -26,8 +26,15 @@ echo ""
 # ── 1. Dependencies ───────────────────────────────────────────────────────────
 echo "[1/5] Checking dependencies..."
 
+# Remove conflicting pip 'gi' stub that shadows the system python3-gi package
+if pip3 show gi &>/dev/null 2>&1; then
+    info "Removing conflicting pip 'gi' package..."
+    pip3 uninstall -y gi 2>/dev/null || true
+fi
+
 MISSING=""
-python3 -c "import gi" 2>/dev/null       || MISSING="$MISSING python3-gi"
+# Check python3-gi via dpkg (not import) to avoid pip stub false-positive
+dpkg -s python3-gi &>/dev/null 2>&1     || MISSING="$MISSING python3-gi"
 python3 -c "import cairo" 2>/dev/null    || MISSING="$MISSING python3-gi-cairo"
 command -v curl    >/dev/null 2>&1       || MISSING="$MISSING curl"
 command -v wmctrl  >/dev/null 2>&1       || MISSING="$MISSING wmctrl"
