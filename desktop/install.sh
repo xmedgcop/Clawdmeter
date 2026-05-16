@@ -45,10 +45,16 @@ if ! dpkg -s gir1.2-gtk4layershell-1.0 &>/dev/null; then
     if apt-cache show gir1.2-gtk4layershell-1.0 &>/dev/null 2>&1; then
         info "Installing gtk4-layer-shell (always-on-top on Wayland)..."
         sudo apt install -y gir1.2-gtk4layershell-1.0
-    else
-        info "gtk4-layer-shell not in repos — installing xdotool fallback..."
-        sudo apt install -y xdotool wmctrl 2>/dev/null || true
     fi
+fi
+
+# xdotool + wmctrl: X11 always-on-top fallback (always installed as backup)
+MISSING_XT=""
+dpkg -s xdotool &>/dev/null || MISSING_XT="$MISSING_XT xdotool"
+dpkg -s wmctrl  &>/dev/null || MISSING_XT="$MISSING_XT wmctrl"
+if [ -n "$MISSING_XT" ]; then
+    info "Installing X11 keep-above tools:$MISSING_XT"
+    sudo apt install -y $MISSING_XT 2>/dev/null || true
 fi
 
 ok "System dependencies ready"

@@ -405,7 +405,11 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         try:
             from gi.repository import Gtk4LayerShell
             Gtk4LayerShell.init_for_window(self)
-            Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
+            # TOP layer: above normal windows, below screen-lock/notifications.
+            # OVERLAY is reserved by GNOME for trusted compositor surfaces and
+            # is silently rejected for regular apps.
+            Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.TOP)
+            Gtk4LayerShell.set_exclusive_zone(self, -1)   # don't push other surfaces
             Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
         except Exception:
             self.connect("realize", lambda *_: GLib.timeout_add(800, self._apply_keep_above_x11))
