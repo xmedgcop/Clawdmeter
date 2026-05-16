@@ -198,26 +198,70 @@ def poll_api():
         return {"ok": False, "error": "poll failed"}
 
 
+def _subagent_finished(jsonl_path: Path) -> bool:
+    """True if the sub-agent's last JSONL line has stop_reason='end_turn'."""
+    try:
+        last = ""
+        with open(jsonl_path) as fh:
+            for line in fh:
+                if line.strip():
+                    last = line
+        if last:
+            msg = json.loads(last).get("message", {})
+            return msg.get("stop_reason") == "end_turn"
+    except Exception:
+        pass
+    return False
+
+
 def poll_sessions():
-    """Reads ~/.claude/sessions/*.json and returns active sessions."""
+    """Returns active sessions (interactive + running sub-agents)."""
     sessions_dir = Path.home() / ".claude" / "sessions"
+    projects_dir = Path.home() / ".claude" / "projects"
     active = []
+    active_uuids = set()
+
+    # ── Interactive sessions (have a live PID) ────────────────────────────────
     try:
         for f in sessions_dir.glob("*.json"):
             try:
                 d = json.loads(f.read_text())
-                # Verificar que el proceso sigue vivo
                 pid = d.get("pid")
+                sid = d.get("sessionId", "")
                 if pid and Path(f"/proc/{pid}").exists():
                     active.append({
                         "pid":    pid,
                         "status": d.get("status", "?"),
                         "cwd":    Path(d.get("cwd", "?")).name,
                     })
+                    if sid:
+                        active_uuids.add(sid)
             except Exception:
                 pass
     except Exception:
         pass
+
+    # ── Sub-agents (no PID — live in <uuid>/subagents/agent-*.jsonl) ─────────
+    # A sub-agent is considered running if its JSONL was written to within the
+    # last 90 seconds AND its last line is not stop_reason='end_turn'.
+    now = time.time()
+    for uuid in active_uuids:
+        sa_dirs = list(projects_dir.rglob(f"{uuid}/subagents"))
+        for sa_dir in sa_dirs:
+            try:
+                for sa_file in sa_dir.glob("agent-*.jsonl"):
+                    if now - sa_file.stat().st_mtime > 90:
+                        continue   # stale — finished more than 90 s ago
+                    if _subagent_finished(sa_file):
+                        continue   # end_turn marker present
+                    active.append({
+                        "pid":    None,
+                        "status": "busy",
+                        "cwd":    "",
+                    })
+            except Exception:
+                pass
+
     return active
 
 
