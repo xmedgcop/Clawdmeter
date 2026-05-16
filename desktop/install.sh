@@ -36,9 +36,17 @@ dpkg -s libcairo2-dev  &>/dev/null || MISSING="$MISSING libcairo2-dev"
 dpkg -s libglib2.0-dev &>/dev/null || MISSING="$MISSING libglib2.0-dev"
 dpkg -s python3-dev    &>/dev/null || MISSING="$MISSING python3-dev"
 dpkg -s pkg-config     &>/dev/null || MISSING="$MISSING pkg-config"
-# python3-venv package name depends on the Python version (e.g. python3.12-venv)
+# python3-venv: only add if the versioned package exists in repos
 PY_MINOR="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-dpkg -s "python${PY_MINOR}-venv" &>/dev/null || MISSING="$MISSING python${PY_MINOR}-venv"
+VENV_PKG="python${PY_MINOR}-venv"
+if ! dpkg -s "$VENV_PKG" &>/dev/null && ! dpkg -s python3-venv &>/dev/null; then
+    if apt-cache show "$VENV_PKG" &>/dev/null 2>&1; then
+        MISSING="$MISSING $VENV_PKG"
+    elif apt-cache show python3-venv &>/dev/null 2>&1; then
+        MISSING="$MISSING python3-venv"
+    fi
+    # If neither is in repos, venv is bootstrapped manually in step 3
+fi
 # Runtime GIR typelibs (not pip-installable — must come from apt)
 dpkg -s gir1.2-gtk-4.0 &>/dev/null || MISSING="$MISSING gir1.2-gtk-4.0"
 command -v curl >/dev/null 2>&1    || MISSING="$MISSING curl"
@@ -89,7 +97,15 @@ if [ -d "$VENV_DIR" ]; then
     rm -rf "$VENV_DIR"
 fi
 
-"$PYTHON_BIN" -m venv "$VENV_DIR"
+# Create venv — if ensurepip is missing (Ubuntu 26+), bootstrap pip manually
+if ! "$PYTHON_BIN" -m venv "$VENV_DIR" 2>/dev/null; then
+    info "ensurepip unavailable, bootstrapping pip manually..."
+    "$PYTHON_BIN" -m venv --without-pip "$VENV_DIR"
+    curl -s https://bootstrap.pypa.io/get-pip.py -o /tmp/clawdmeter-get-pip.py
+    "$VENV_DIR/bin/python" /tmp/clawdmeter-get-pip.py --quiet
+    rm -f /tmp/clawdmeter-get-pip.py
+fi
+
 VENV_PYTHON="$VENV_DIR/bin/python"
 VENV_PIP="$VENV_DIR/bin/pip"
 
