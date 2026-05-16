@@ -9,7 +9,22 @@ Deps:   python3-gi  python3-gi-cairo  (sudo apt install python3-gi-cairo)
 
 import math
 import os
-os.environ.setdefault("GDK_BACKEND", "x11")  # force XWayland so wmctrl can set _NET_WM_STATE_ABOVE
+
+# Probe for gtk4-layer-shell BEFORE locking the GDK backend.
+# Layer shell is the only reliable always-on-top mechanism on GNOME Wayland —
+# _NET_WM_STATE_ABOVE via XWayland is intentionally ignored by the compositor.
+def _layer_shell_available():
+    try:
+        import gi as _gi
+        _gi.require_version("Gtk4LayerShell", "1.0")
+        from gi.repository import Gtk4LayerShell  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+_HAVE_LAYER_SHELL = _layer_shell_available()
+if not _HAVE_LAYER_SHELL:
+    os.environ.setdefault("GDK_BACKEND", "x11")  # XWayland fallback
 
 import gi
 gi.require_version("Gtk", "4.0")
@@ -354,7 +369,7 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         self.set_decorated(False)
         self.set_resizable(False)
         self.set_icon_name(ICON_NAME)
-        self.connect("realize", lambda *_: GLib.timeout_add(300, self._apply_keep_above))
+        self.connect("realize", self._on_realize)
 
         self.animations  = load_animations()
         self._anim_idx   = 0
@@ -375,16 +390,41 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         self._refresh_local()
         GLib.timeout_add(5_000, self._refresh_local)
 
-    def _apply_keep_above(self):
-        if shutil.which("wmctrl") is None:
-            return False
+    def _on_realize(self, *_):
+        if _HAVE_LAYER_SHELL:
+            self._apply_layer_shell()
+        else:
+            GLib.timeout_add(800, self._apply_keep_above_x11)
+
+    def _apply_layer_shell(self):
         try:
-            subprocess.Popen(
-                ["wmctrl", "-r", "Clawdmeter", "-b", "add,above"],
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError:
-            pass
+            from gi.repository import Gtk4LayerShell
+            Gtk4LayerShell.init_for_window(self)
+            Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
+            Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
+        except Exception:
+            GLib.timeout_add(800, self._apply_keep_above_x11)
+
+    def _apply_keep_above_x11(self):
+        title = "Clawdmeter"
+        if shutil.which("xdotool"):
+            try:
+                subprocess.Popen(
+                    ["xdotool", "search", "--sync", "--name", title,
+                     "windowstate", "--add", "ABOVE"],
+                    stderr=subprocess.DEVNULL,
+                )
+                return False
+            except OSError:
+                pass
+        if shutil.which("wmctrl"):
+            try:
+                subprocess.Popen(
+                    ["wmctrl", "-r", title, "-b", "add,above"],
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                pass
         return False
 
     # ── CSS ───────────────────────────────────────────────────────────────────

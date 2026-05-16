@@ -31,11 +31,26 @@ dpkg -s python3-gi        &>/dev/null || MISSING="$MISSING python3-gi"
 dpkg -s python3-gi-cairo  &>/dev/null || MISSING="$MISSING python3-gi-cairo"
 dpkg -s gir1.2-gtk-4.0   &>/dev/null || MISSING="$MISSING gir1.2-gtk-4.0"
 command -v curl   >/dev/null 2>&1     || MISSING="$MISSING curl"
-command -v wmctrl >/dev/null 2>&1     || MISSING="$MISSING wmctrl"
 
 if [ -n "$MISSING" ]; then
     info "Installing:$MISSING"
     sudo apt install -y $MISSING
+fi
+
+# Always-on-top: prefer gtk4-layer-shell (Wayland-native), fall back to xdotool/wmctrl
+ABOVE_MISSING=""
+dpkg -s gir1.2-gtk4layershell-1.0 &>/dev/null || ABOVE_MISSING="$ABOVE_MISSING gir1.2-gtk4layershell-1.0"
+if [ -n "$ABOVE_MISSING" ]; then
+    # Try layer shell first; if not in repos fall back to xdotool+wmctrl
+    if apt-cache show gir1.2-gtk4layershell-1.0 &>/dev/null 2>&1; then
+        info "Installing always-on-top support (gtk4-layer-shell)..."
+        sudo apt install -y gir1.2-gtk4layershell-1.0
+    else
+        info "gtk4-layer-shell not available, installing xdotool+wmctrl fallback..."
+        sudo apt install -y xdotool wmctrl 2>/dev/null || true
+    fi
+else
+    ok "gtk4-layer-shell already installed"
 fi
 
 # Verify GTK4 actually works after install
