@@ -24,28 +24,16 @@ echo "║     Clawdmeter Desktop — Install     ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
-# ── 1. System build deps + typelibs ──────────────────────────────────────────
+# ── 1. System packages ────────────────────────────────────────────────────────
+# We use the system python3-gi (PyGObject) rather than pip-compiling it,
+# which avoids needing libgirepository-dev and a C toolchain in the venv.
 echo "[1/5] Installing system dependencies..."
 
 MISSING=""
-# Build deps for PyGObject / pycairo (compiled inside venv via pip)
-# Ubuntu 26+ uses girepository-2.0; Ubuntu 24 uses 1.0
-if ! dpkg -s libgirepository-2.0-dev &>/dev/null && ! dpkg -s libgirepository1.0-dev &>/dev/null; then
-    if apt-cache show libgirepository-2.0-dev &>/dev/null 2>&1; then
-        MISSING="$MISSING libgirepository-2.0-dev"
-    else
-        MISSING="$MISSING libgirepository1.0-dev"
-    fi
-fi
-dpkg -s libcairo2-dev  &>/dev/null || MISSING="$MISSING libcairo2-dev"
-dpkg -s libglib2.0-dev &>/dev/null || MISSING="$MISSING libglib2.0-dev"
-dpkg -s python3-dev    &>/dev/null || MISSING="$MISSING python3-dev"
-dpkg -s pkg-config     &>/dev/null || MISSING="$MISSING pkg-config"
-# python3-venv is NOT added to apt — venv is always bootstrapped via get-pip.py
-# to avoid broken/missing package URLs on Ubuntu 26+
-# Runtime GIR typelibs (not pip-installable — must come from apt)
-dpkg -s gir1.2-gtk-4.0 &>/dev/null || MISSING="$MISSING gir1.2-gtk-4.0"
-command -v curl >/dev/null 2>&1    || MISSING="$MISSING curl"
+dpkg -s python3-gi        &>/dev/null || MISSING="$MISSING python3-gi"
+dpkg -s python3-gi-cairo  &>/dev/null || MISSING="$MISSING python3-gi-cairo"
+dpkg -s gir1.2-gtk-4.0   &>/dev/null || MISSING="$MISSING gir1.2-gtk-4.0"
+command -v curl >/dev/null 2>&1       || MISSING="$MISSING curl"
 
 if [ -n "$MISSING" ]; then
     info "Installing:$MISSING"
@@ -58,7 +46,7 @@ if ! dpkg -s gir1.2-gtk4layershell-1.0 &>/dev/null; then
         info "Installing gtk4-layer-shell (always-on-top on Wayland)..."
         sudo apt install -y gir1.2-gtk4layershell-1.0
     else
-        info "gtk4-layer-shell not available in repos — installing xdotool fallback..."
+        info "gtk4-layer-shell not in repos — installing xdotool fallback..."
         sudo apt install -y xdotool wmctrl 2>/dev/null || true
     fi
 fi
@@ -86,6 +74,8 @@ PY_VER="$("$PYTHON_BIN" --version 2>&1)"
 ok "Python: $PY_VER ($PYTHON_BIN)"
 
 # ── 3. Virtual environment ────────────────────────────────────────────────────
+# --system-site-packages lets the venv see system python3-gi/gir typelibs
+# without needing to compile PyGObject from source inside the venv.
 echo "[3/5] Creating virtual environment..."
 
 if [ -d "$VENV_DIR" ]; then
@@ -93,8 +83,7 @@ if [ -d "$VENV_DIR" ]; then
     rm -rf "$VENV_DIR"
 fi
 
-# Always create venv without pip then bootstrap — avoids python3.X-venv apt issues
-"$PYTHON_BIN" -m venv --without-pip "$VENV_DIR"
+"$PYTHON_BIN" -m venv --system-site-packages --without-pip "$VENV_DIR"
 info "Bootstrapping pip..."
 curl -s https://bootstrap.pypa.io/get-pip.py -o /tmp/clawdmeter-get-pip.py
 "$VENV_DIR/bin/python" /tmp/clawdmeter-get-pip.py --quiet
@@ -106,12 +95,9 @@ VENV_PIP="$VENV_DIR/bin/pip"
 info "Upgrading pip..."
 "$VENV_PIP" install --quiet --upgrade pip
 
-info "Installing PyGObject and pycairo..."
-"$VENV_PIP" install --quiet PyGObject pycairo
-
-# Verify GTK4 works inside the venv
+# Verify GTK4 works inside the venv via system-site-packages
 if ! "$VENV_PYTHON" -c "import gi; gi.require_version('Gtk','4.0'); from gi.repository import Gtk" 2>/dev/null; then
-    err "GTK4 not working in venv. Ensure gir1.2-gtk-4.0 and libgirepository-dev are installed."
+    err "GTK4 not working in venv. Ensure python3-gi and gir1.2-gtk-4.0 are installed."
 fi
 
 ok "Virtual environment ready ($VENV_DIR)"
