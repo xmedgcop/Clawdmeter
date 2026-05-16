@@ -36,6 +36,9 @@ dpkg -s libcairo2-dev  &>/dev/null || MISSING="$MISSING libcairo2-dev"
 dpkg -s libglib2.0-dev &>/dev/null || MISSING="$MISSING libglib2.0-dev"
 dpkg -s python3-dev    &>/dev/null || MISSING="$MISSING python3-dev"
 dpkg -s pkg-config     &>/dev/null || MISSING="$MISSING pkg-config"
+# python3-venv package name depends on the Python version (e.g. python3.12-venv)
+PY_MINOR="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+dpkg -s "python${PY_MINOR}-venv" &>/dev/null || MISSING="$MISSING python${PY_MINOR}-venv"
 # Runtime GIR typelibs (not pip-installable — must come from apt)
 dpkg -s gir1.2-gtk-4.0 &>/dev/null || MISSING="$MISSING gir1.2-gtk-4.0"
 command -v curl >/dev/null 2>&1    || MISSING="$MISSING curl"
