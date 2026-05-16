@@ -24,47 +24,28 @@ echo "╚═══════════════════════�
 echo ""
 
 # ── 1. Dependencies ───────────────────────────────────────────────────────────
-echo "[1/5] Checking dependencies..."
-
-# Remove conflicting pip 'gi' stub that shadows the system python3-gi package
-if pip3 show gi &>/dev/null 2>&1; then
-    info "Removing conflicting pip 'gi' package..."
-    pip3 uninstall -y gi 2>/dev/null || true
-fi
+echo "[1/4] Checking dependencies..."
 
 MISSING=""
-# Check python3-gi via dpkg (not import) to avoid pip stub false-positive
-dpkg -s python3-gi &>/dev/null 2>&1     || MISSING="$MISSING python3-gi"
-python3 -c "import cairo" 2>/dev/null    || MISSING="$MISSING python3-gi-cairo"
-command -v curl    >/dev/null 2>&1       || MISSING="$MISSING curl"
-command -v wmctrl  >/dev/null 2>&1       || MISSING="$MISSING wmctrl"
+dpkg -s python3-gi        &>/dev/null || MISSING="$MISSING python3-gi"
+dpkg -s python3-gi-cairo  &>/dev/null || MISSING="$MISSING python3-gi-cairo"
+dpkg -s gir1.2-gtk-4.0   &>/dev/null || MISSING="$MISSING gir1.2-gtk-4.0"
+command -v curl   >/dev/null 2>&1     || MISSING="$MISSING curl"
+command -v wmctrl >/dev/null 2>&1     || MISSING="$MISSING wmctrl"
 
 if [ -n "$MISSING" ]; then
     info "Installing:$MISSING"
     sudo apt install -y $MISSING
 fi
+
+# Verify GTK4 actually works after install
+if ! python3 -c "import gi; gi.require_version('Gtk','4.0'); from gi.repository import Gtk" 2>/dev/null; then
+    err "GTK4 Python bindings not working. Try: sudo apt install --reinstall python3-gi gir1.2-gtk-4.0"
+fi
 ok "Dependencies ready"
 
-# ── 2. Account config ─────────────────────────────────────────────────────────
-echo "[2/5] Configuring account..."
-
-mkdir -p "$CONFIG_DIR"
-if [ ! -f "$CONFIG_DIR/config.json" ]; then
-    read -rp "  Enter your Claude account email (leave blank to skip): " email
-    if [ -n "$email" ]; then
-        python3 -c "import json,sys; print(json.dumps({'email': sys.argv[1]}))" "$email" \
-            > "$CONFIG_DIR/config.json"
-        ok "Email saved to $CONFIG_DIR/config.json"
-    else
-        printf '{"email": ""}\n' > "$CONFIG_DIR/config.json"
-        info "No email set — you can edit $CONFIG_DIR/config.json later"
-    fi
-else
-    ok "Config already exists ($CONFIG_DIR/config.json)"
-fi
-
-# ── 3. Icon ───────────────────────────────────────────────────────────────────
-echo "[3/5] Installing icon..."
+# ── 2. Icon ───────────────────────────────────────────────────────────────────
+echo "[2/4] Installing icon..."
 
 ICON_DIR="$HOME/.local/share/icons/hicolor/128x128/apps"
 mkdir -p "$ICON_DIR"
@@ -77,8 +58,8 @@ else
     info "Icon not found in assets/ — default icon will be used"
 fi
 
-# ── 4. App launcher entry ─────────────────────────────────────────────────────
-echo "[4/5] Registering in app launcher..."
+# ── 3. App launcher entry ─────────────────────────────────────────────────────
+echo "[3/4] Registering in app launcher..."
 
 mkdir -p "$HOME/.local/share/applications"
 cat > "$HOME/.local/share/applications/${APP_ID}.desktop" << EOF
@@ -98,8 +79,8 @@ EOF
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 ok "Available in launcher (search 'Clawdmeter')"
 
-# ── 5. Autostart ──────────────────────────────────────────────────────────────
-echo "[5/5] Configuring autostart..."
+# ── 4. Autostart ──────────────────────────────────────────────────────────────
+echo "[4/4] Configuring autostart..."
 
 mkdir -p "$HOME/.config/autostart"
 cat > "$HOME/.config/autostart/${APP_ID}.desktop" << EOF

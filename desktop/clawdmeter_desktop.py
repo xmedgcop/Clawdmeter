@@ -97,18 +97,35 @@ def read_token():
 
 
 def read_account_info():
-    """Email from ~/.config/clawdmeter/config.json; fallback to subscriptionType."""
-    config_file = Path.home() / ".config" / "clawdmeter" / "config.json"
+    """Auto-detect email from Anthropic OAuth API; fallback to config file."""
     try:
-        cfg = json.loads(config_file.read_text())
+        creds_path = Path.home() / ".claude" / ".credentials.json"
+        token = json.loads(creds_path.read_text())["claudeAiOauth"]["accessToken"]
+        result = subprocess.run(
+            ["curl", "-s",
+             "-H", f"Authorization: Bearer {token}",
+             "-H", "anthropic-version: 2023-06-01",
+             "https://api.anthropic.com/api/oauth/claude_cli/roles"],
+            capture_output=True, text=True, timeout=5,
+        )
+        org = json.loads(result.stdout).get("organization_name", "")
+        m = re.match(r"^(.+?)'s Organization$", org)
+        if m:
+            return m.group(1)
+        if org:
+            return org
+    except Exception:
+        pass
+    # Fallback: manual config override
+    try:
+        cfg = json.loads((Path.home() / ".config" / "clawdmeter" / "config.json").read_text())
         email = cfg.get("email", "")
         if email:
             return email
     except Exception:
         pass
     try:
-        creds_path = Path.home() / ".claude" / ".credentials.json"
-        d = json.loads(creds_path.read_text())
+        d = json.loads((Path.home() / ".claude" / ".credentials.json").read_text())
         sub = d.get("claudeAiOauth", {}).get("subscriptionType", "")
         if sub:
             return f"claude {sub}"
