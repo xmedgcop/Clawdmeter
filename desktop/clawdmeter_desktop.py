@@ -10,10 +10,15 @@ Deps:   python3-gi  python3-gi-cairo  (sudo apt install python3-gi-cairo)
 import math
 import os
 
-# Probe for gtk4-layer-shell BEFORE locking the GDK backend.
-# Layer shell is the only reliable always-on-top mechanism on GNOME Wayland —
-# _NET_WM_STATE_ABOVE via XWayland is intentionally ignored by the compositor.
+# Layer shell is the only reliable always-on-top on GNOME Wayland.
+# On X11 sessions it silently no-ops, so we gate on session type first.
 def _layer_shell_available():
+    on_wayland = bool(
+        os.environ.get("WAYLAND_DISPLAY") or
+        os.environ.get("XDG_SESSION_TYPE") == "wayland"
+    )
+    if not on_wayland:
+        return False
     try:
         import gi as _gi
         _gi.require_version("Gtk4LayerShell", "1.0")
@@ -24,7 +29,7 @@ def _layer_shell_available():
 
 _HAVE_LAYER_SHELL = _layer_shell_available()
 if not _HAVE_LAYER_SHELL:
-    os.environ.setdefault("GDK_BACKEND", "x11")  # XWayland fallback
+    os.environ.setdefault("GDK_BACKEND", "x11")
 
 import gi
 gi.require_version("Gtk", "4.0")
