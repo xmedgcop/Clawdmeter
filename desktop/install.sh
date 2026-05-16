@@ -29,9 +29,14 @@ echo "[1/5] Installing system dependencies..."
 
 MISSING=""
 # Build deps for PyGObject / pycairo (compiled inside venv via pip)
-dpkg -s libgirepository1.0-dev &>/dev/null \
-    || dpkg -s libgirepository-2.0-dev &>/dev/null \
-    || MISSING="$MISSING libgirepository1.0-dev"
+# Ubuntu 26+ uses girepository-2.0; Ubuntu 24 uses 1.0
+if ! dpkg -s libgirepository-2.0-dev &>/dev/null && ! dpkg -s libgirepository1.0-dev &>/dev/null; then
+    if apt-cache show libgirepository-2.0-dev &>/dev/null 2>&1; then
+        MISSING="$MISSING libgirepository-2.0-dev"
+    else
+        MISSING="$MISSING libgirepository1.0-dev"
+    fi
+fi
 dpkg -s libcairo2-dev  &>/dev/null || MISSING="$MISSING libcairo2-dev"
 dpkg -s libglib2.0-dev &>/dev/null || MISSING="$MISSING libglib2.0-dev"
 dpkg -s python3-dev    &>/dev/null || MISSING="$MISSING python3-dev"
