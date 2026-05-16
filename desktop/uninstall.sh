@@ -21,6 +21,9 @@ rm -f "$HOME/.local/share/icons/hicolor/128x128/apps/${APP_ID}.png"
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 ok "Icon removed"
 
+rm -rf "$HOME/.local/share/clawdmeter"
+ok "Virtual environment removed"
+
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 
 echo ""
