@@ -369,7 +369,13 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         self.set_decorated(False)
         self.set_resizable(False)
         self.set_icon_name(ICON_NAME)
-        self.connect("realize", self._on_realize)
+
+        # Layer shell must be initialised BEFORE the window is realized/shown.
+        # Connecting to "realize" is too late — init_for_window() would no-op.
+        if _HAVE_LAYER_SHELL:
+            self._init_layer_shell()
+        else:
+            self.connect("realize", lambda *_: GLib.timeout_add(800, self._apply_keep_above_x11))
 
         self.animations  = load_animations()
         self._anim_idx   = 0
@@ -390,20 +396,14 @@ class ClawdmeterWindow(Gtk.ApplicationWindow):
         self._refresh_local()
         GLib.timeout_add(5_000, self._refresh_local)
 
-    def _on_realize(self, *_):
-        if _HAVE_LAYER_SHELL:
-            self._apply_layer_shell()
-        else:
-            GLib.timeout_add(800, self._apply_keep_above_x11)
-
-    def _apply_layer_shell(self):
+    def _init_layer_shell(self):
         try:
             from gi.repository import Gtk4LayerShell
             Gtk4LayerShell.init_for_window(self)
             Gtk4LayerShell.set_layer(self, Gtk4LayerShell.Layer.OVERLAY)
             Gtk4LayerShell.set_keyboard_mode(self, Gtk4LayerShell.KeyboardMode.NONE)
         except Exception:
-            GLib.timeout_add(800, self._apply_keep_above_x11)
+            self.connect("realize", lambda *_: GLib.timeout_add(800, self._apply_keep_above_x11))
 
     def _apply_keep_above_x11(self):
         title = "Clawdmeter"
